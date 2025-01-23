@@ -1,0 +1,517 @@
+<!DOCTYPE HTML>
+<html lang="en">
+<head>
+     <meta charset="UTF-8"> 
+     
+     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+     
+     <link rel="shortcut icon" type="image/x-icon" sizes="16x16" href="favicon.ico">
+     <link rel="shortcut icon" type="image/png" sizes="32x32" href="favicon32.png">
+     <link rel="apple-touch-icon" type="image/png" sizes="152x152" href="favicon152.png">
+
+     <meta name="viewport" content="width=device-width, initial-scale=1">
+     
+     <style>
+         .matched {
+         	stroke: green;
+         	fill: none;
+         	opacity: 0.5;
+         	stroke-width: 2;
+         }
+		 
+         .unmatched {
+         	stroke: red;
+         	fill: none;
+         	opacity: 0.5;
+         	stroke-width: 2;
+         }
+         </style>
+     
+     <title>visualize magicblast output</title>
+
+
+	 <script src="https://cdn.jsdelivr.net/npm/d3@7"></script>
+     
+     <script type="text/javascript">
+		 
+		 class alignment {
+			 constructor(queryName, isItForward, leftPOS, cigarString, querySequence) {
+			 	this.queryName = queryName;
+				this.isItForward = isItForward; 
+				this.leftPOS = leftPOS; 
+				this.cigarString = cigarString; 
+				this.querySequence = querySequence;
+				this.totalLength = this.calculateTotalLength();
+				this.explainedSet = this.explainCIGAR();
+				this.letters = this.getLetters();
+                this.noSkippedSegmSet = this.explainedSet.filter(d => (d.chunk_type == "M" || d.chunk_type == "I" || d.chunk_type == "S" || d.chunk_type == "=" || d.chunk_type == "X"));
+                
+                // add in each element new start and new stop, that correspond to actual exon borders on mature mRNA
+                var chunk_adder = 0;
+                this.noSkippedSegmSet.forEach((d, i) => {
+                    d.newStart = chunk_adder+1;
+                    d.newEnd = chunk_adder+d.chunk_length;
+                    chunk_adder = d.newEnd;
+                });
+                
+
+//				this.totalLengthB = 0;
+				
+			 }
+			 
+			 // returns unique letters in cigar string
+             getLetters() {
+				 var letters = new Array();
+				 [...new Set(this.cigarString.match(/[MIDNSHP=X]/g))].forEach(d => {
+					 letters.push({
+						 letter: d,
+						 instances: this.explainedSet.filter(s => s.chunk_type == d).length
+					 });
+				 });
+				 return letters;
+                 //return [...new Set(this.cigarString.match(/[MIDNSHP=X]/g))];
+             }
+			 
+             // calculate total length
+             calculateTotalLength() {
+                 var totalLength = 0;
+                 this.cigarString.match(/\d+/g).forEach(d => {totalLength += parseInt(d, 10);});
+                 return totalLength;
+             }
+			 
+			 // explain CIGAR and produce an array of objects
+			 explainCIGAR() {
+			 	var segments = this.cigarString.match(/(\d+[MIDNSHP=X]{1})/g);
+				
+                // stores all CIGAR segments
+				var explainedSet = new Array();
+                			
+				var multiplier = 1;
+				var refAdder = 0;
+				
+				if (this.isItForward == false) {
+					segments.reverse();
+					refAdder += this.totalLength-1;
+					multiplier = -1;
+				}
+				
+				refAdder += this.leftPOS-(multiplier*1);
+				
+				var chunk_adder = 0;
+				for (var i=0; i<segments.length; i++) {
+					var chunk_start = chunk_adder + 1;
+					var chunk_name = segments[i];
+					var chunk_length = parseInt(chunk_name.match(/(\d+)/g)[0], 10);
+//					this.totalLengthB += chunk_length; 
+					var chunk_end = chunk_adder + chunk_length;
+					var chunk_type = chunk_name.match(/\D/)[0];
+					
+					var chunkRefStart = refAdder + multiplier*1;
+					var chunkRefEnd = refAdder + multiplier*chunk_length;
+					
+					explainedSet.push({
+						chunk_order: i,
+						chunk_name: chunk_name,
+						chunk_length: chunk_length,
+						chunk_type: chunk_type,
+						chunk_start: chunk_start,
+						chunk_end: chunk_end,
+						chunkRefStart: chunkRefStart,
+						chunkRefEnd: chunkRefEnd
+					});
+					chunk_adder = chunk_end;
+					refAdder = chunkRefEnd;
+				}
+				
+				return explainedSet;
+				
+			 }
+			 
+             // return a short string that is a brief description of what and how many segments is the CIGAR string made of
+			 get CIGARcomposition() {
+				 var outputStr = "";
+				 this.letters.forEach(d => {
+					 outputStr += d.letter + ":" + d.instances + "  ";
+				 });
+				 
+				 return outputStr;
+			 }
+			 
+             // return normal or reverse regarding the mRNA alignment on the chromosome
+			 get orientation() {
+				 return (this.isItForward) ? "normal" : "reverse";
+			 }
+			 
+             // return the maximum right position on the RefSeq
+			 get maxRightRefPos () {
+			 	var tempNums = new Array();
+				this.explainedSet.forEach(d => tempNums.push(d.chunkRefEnd));
+				return Math.max(...tempNums);
+			 }
+			 
+             // return the maximum right position which should be equal to adding all segments
+			 get maxRightPos () {
+				 var tempNums = new Array();
+				 this.explainedSet.forEach(d => tempNums.push(d.chunk_end));
+				 return Math.max(...tempNums);
+			 }
+		 }
+		 
+		 class oneRead {
+             constructor() {
+                 this.orientationAlert = "read initialized";
+             }
+			 
+			 // initialize each alignment			 
+			 letsGo(samInput) {
+
+				 this.alignmentsAROB = new Array();
+				 this.refSeqLen = parseInt(samInput.match(/(?<=@SQ.+LN:)\d+(?=\n)/g)[0], 10);
+				 this.alignmentsARAR = samInput.match(/(?<=\n)(.+\d+[MIDNSHP=X]{1}.+)(?=\B)/g);
+				 this.alignmentsARAR.forEach(d => {
+					var initial = d.match(/^.+(?=(\t[0-9]+[MIDNSHP=X])+)/g)[0].split('\t');
+					this.alignmentsAROB.push(new alignment(
+						initial[0], 
+						((parseInt(initial[1], 10) == 16) ? false : true), 
+						parseInt(initial[3], 10),
+						d.match(/([0-9]+[MIDNSHP=X])+/g)[0],
+						d.match(/\b[ATGCatgc]{2,}(?=\t)/g)[0]
+					));
+				});
+				
+				var tempMAxArr = new Array();
+				this.alignmentsAROB.forEach(d => tempMAxArr.push(d.maxRightPos));
+				this.maxRightPos = Math.max(...tempMAxArr);
+                this.comSegmSet();
+				
+			 }
+			 
+			 // start output usind D3.js
+			 printFirstData() {
+				 
+			 	var tBody = d3.select("#alignmentInfo").selectAll("tr").data(this.alignmentsAROB).enter().append("tr");
+				
+                tBody.append("td").text(d => d.queryName);
+				tBody.append("td").text(d => d.querySequence.length);
+                tBody.append("td").text(d => d.CIGARcomposition);
+                tBody.append("td").text(d => d.totalLength);
+                tBody.append("td").text(d => d.leftPOS);
+                tBody.append("td").text(d => d.leftPOS+d.totalLength);
+                tBody.append("td").text(d => d.orientation);
+                
+                document.getElementById("comSegmNo").innerHTML = this.commonSegments.length;
+                
+                //comSegmTBody
+			 	var comSegmTBody = d3.select("#comSegmTBody").selectAll("tr").data(this.commonSegments).enter().append("tr");
+				
+                comSegmTBody.append("td").text(d => d.chunk_name);
+                comSegmTBody.append("td").text(d => d.chunk_length);
+                comSegmTBody.append("td").text(d => d.chunk_type);
+                comSegmTBody.append("td").text(d => d.chunkRefStart);
+                comSegmTBody.append("td").text(d => d.chunkRefEnd);
+                
+                document.getElementById("firstTable").style.display = "block";
+                document.getElementById("comSegm").style.display = "block";
+                document.getElementById("drawBtn").style.display = "block";
+                
+                
+                
+			 }
+             
+             printTranscripts() {
+                 const transcContainer = d3.select("#transcripts").selectAll("div").data(this.alignmentsAROB).enter().append("div").attr("class", "row my-2 rounded border border-dark border-3");
+                 var eachRow = transcContainer.append("div").attr("class", "col-12 table-responsive");
+                 
+                 
+                 
+                 var firstP = eachRow.append("p");
+                 firstP.text(d => "Transcript: " + d.queryName + " (" + d.querySequence.length + " bp)");
+                 
+                 
+                 var noSkippedTable = eachRow.append("table").attr("class", "table table-hover table-bordered");
+                 var noSkippedTableHead = noSkippedTable.append("thead").attr('class', 'table-light');
+                 var noSkippedTableHeadTr = noSkippedTableHead.append("tr");
+                 noSkippedTableHeadTr.append("th").text("order");
+                 noSkippedTableHeadTr.append("th").text("name");
+                 noSkippedTableHeadTr.append("th").text("length");
+                 noSkippedTableHeadTr.append("th").text("type");
+                 noSkippedTableHeadTr.append("th").text("new start");
+                 noSkippedTableHeadTr.append("th").text("new stop");
+                 noSkippedTableHeadTr.append("th").text("subject start");
+                 noSkippedTableHeadTr.append("th").text("subject stop");
+                 noSkippedTableHeadTr.append("th").text("old start");
+                 noSkippedTableHeadTr.append("th").text("old stop");
+                 
+                 
+                 var noSkippedTableBody = noSkippedTable.append("tbody");
+                 
+                 
+                 
+                 var noSkippedTableBodyTr = noSkippedTableBody.selectAll("tr").data(d => d.noSkippedSegmSet).enter().append("tr");
+                 noSkippedTableBodyTr.append("td").text((d, i) => i+1);
+                 
+                 var chunk_nameTD = noSkippedTableBodyTr.append("td").attr("class", d => this.commonNames.includes(d.chunk_name) ? "table-success" : "table-danger").text(d => d.chunk_name);
+                 noSkippedTableBodyTr.append("td").text(d => d.chunk_length);
+                 noSkippedTableBodyTr.append("td").text(d => d.chunk_type);
+                 noSkippedTableBodyTr.append("td").text(d => d.newStart);
+                 noSkippedTableBodyTr.append("td").text(d => d.newEnd);
+                 noSkippedTableBodyTr.append("td").text(d => d.chunkRefStart);
+                 noSkippedTableBodyTr.append("td").text(d => d.chunkRefEnd);
+                 noSkippedTableBodyTr.append("td").text(d => d.chunk_start);
+                 noSkippedTableBodyTr.append("td").text(d => d.chunk_end);
+                 
+                 
+                 // and finally the sketch of the exons
+ 
+                 
+                 const width = parseInt(eachRow.style("width"), 10)-50;
+                 const height = parseInt(eachRow.style("heigth"), 10);
+                 
+                 console.log(width);
+                 console.log(height);
+                 
+                 const paddingLeft = 10;
+                 const paddingRight = 5;
+			 
+				 const bar_height = 20;
+				 const paddingTop = 20;
+				 var calcHeight = paddingTop + bar_height;
+				 
+				 const matched_height = 16;
+                 
+                 const localSVG = eachRow.append("svg").attr('width', width).attr('height', calcHeight+paddingTop);
+        
+                 var bars = localSVG.selectAll('rect').data(d => d.noSkippedSegmSet).enter()
+				 .append('rect')
+				 .attr('y', bar_height)
+                 .attr('x', function (d) {
+                     var maxLen = this.parentNode.__data__.querySequence.length;
+                     var xScale = d3.scaleLinear().domain([1, maxLen]).range([1, width]);
+                     return xScale(Math.min(d.newStart, d.newEnd));
+                 })
+                 .attr('width', function (d) {
+                     var maxLen = this.parentNode.__data__.querySequence.length;
+                     var xScale = d3.scaleLinear().domain([1, maxLen]).range([1, width]);
+                     return Math.abs(xScale(d.chunk_length)-paddingRight);
+                 })
+//				 .attr('x', d => getXScale(Math.min(d.newStart, d.newEnd))(0))
+//				 .attr('width', (d) => Math.abs(xScale(d.chunk_length)-paddingRight))
+				 .attr('height', matched_height)
+				 .attr('class', "matched");
+                 
+                 
+
+
+                 
+                 
+             }
+			 
+			 get maxLen () {
+			 	var tempNums = new Array();
+				this.alignmentsAROB.forEach(d => tempNums.push(d.totalLength));
+				return Math.max(...tempNums);
+			 }
+			 
+			 get minLeftPos () {
+ 			 	var tempNums = new Array();
+ 				this.alignmentsAROB.forEach(d => tempNums.push(d.leftPOS));
+ 				return Math.min(...tempNums);
+			 }
+			 
+			 drawAttempt(elementId) {
+                 const paddingLeft = 10;
+                 const paddingRight = 5;
+				 
+             
+                 const width = parseInt(d3.select(elementId).style('width'), 10);
+                 const height = parseInt(d3.select(elementId).style('height'), 10);
+				 
+				 const bar_height = 20;
+				 const paddingTop = 20;
+				 var calcHeight = 0;
+				 
+				 const matched_height = 16;
+				 const unmatched_height = 1;
+				 
+				 this.alignmentsAROB.forEach(d => (calcHeight += (paddingTop+bar_height)));
+				 
+				 const xScale = d3.scaleLinear().domain([1, this.maxRightPos]).range([1, width]);
+				 
+				 const yScale = d3.scaleBand().domain(this.alignmentsAROB.map(d => d.queryName)).range([0, calcHeight]);
+			 
+             
+                 const blanking = d3.select(elementId).html("");
+				 
+				 const plotArea = d3.select(elementId).append('svg').attr('width', width).attr('height', calcHeight+paddingTop);
+				 
+				 var alignmentGroups = plotArea.selectAll("g").data(this.alignmentsAROB).enter()
+				 .append("g")
+				 .attr("id", d => d.queryName)
+				 .attr('transform', d => `translate(0, ${yScale(d.queryName)})`);
+				 
+				 
+				 
+				 var bars = alignmentGroups.selectAll('rect').data(d => d.explainedSet).enter()
+				 .append('rect')
+				 .attr('y', d => (d.chunk_type == "M" || d.chunk_type == "I" || d.chunk_type == "S" || d.chunk_type == "=" || d.chunk_type == "X") ? bar_height:(bar_height+bar_height/3))
+				 .attr('x', (d) => xScale(Math.min(d.chunkRefEnd, d.chunkRefStart)-this.minLeftPos))
+				 .attr('width', (d) => Math.abs(xScale(d.chunk_length)-paddingRight))
+				 .attr('height', d => (d.chunk_type == "M" || d.chunk_type == "I" || d.chunk_type == "S" || d.chunk_type == "=" || d.chunk_type == "X") ? matched_height:unmatched_height)
+				 .attr('class', d => (d.chunk_type == "M" || d.chunk_type == "I" || d.chunk_type == "S" || d.chunk_type == "=" || d.chunk_type == "X") ? "matched":"unmatched");
+			 
+			 }
+             
+             comSegmSet() {
+                function intersection(arrays, compareFunc) {
+                    return arrays.reduce((acc, arr) => {
+                        return acc.filter(d => arr.some(e => compareFunc(d, e)));
+                    }, arrays[0]);
+                }
+
+                 var compareFunc = (a, b) => a.chunk_name === b.chunk_name && a.chunkRefStart === b.chunkRefStart && a.chunkRefEnd === b.chunkRefEnd;
+
+                 this.commonSegments = intersection(this.alignmentsAROB.map(obj => obj.noSkippedSegmSet), compareFunc);
+                 
+                 this.commonNames = this.commonSegments.map(d => d.chunk_name);
+                 
+                 
+             }
+			 
+		 }
+		 
+		 var testD = new oneRead();
+         
+                 
+               
+         
+     
+                           
+         function clearTable () {
+             testD = new oneRead();
+             
+             document.getElementById("magic_string").value = "";
+             document.getElementById("firstTable").style.display = "none";
+             document.getElementById("comSegm").style.display = "none";
+             document.getElementById("drawBtn").style.display = "none";
+             document.getElementById("alignmentInfo").innerHTML = "";
+             document.getElementById("comSegmTBody").innerHTML = "";
+             document.getElementById("seg_graph").innerHTML = "";
+             
+             
+         }
+         
+     </script>
+     
+</head>
+<body>
+    
+<div class="container-fluid my-2">
+    
+    <h1>visualize magicblast output</h1>
+    
+    <div class="row pb-3">
+        <div class="col-12">
+            <p>Paste here magicblast sam output:</p>
+            <textarea name="magic_string" id="magic_string" class="form-control" rows=10></textarea>
+        </div>
+        
+    </div>
+
+    <div class="row pb-3">
+        <div class="col-sm-6">
+            <!--button type="button" class="btn btn-outline-primary" onclick="readString();">Read Str</button-->
+            <button type="button" class="btn btn-outline-primary" onclick="testD.letsGo(document.getElementById('magic_string').value); testD.printFirstData();">Read Str</button>
+            
+            <button type="button" class="btn btn-outline-secondary" onclick="loadMultiple();">Load example</button>  
+            <button type="button" class="btn btn-outline-danger" onclick="clearTable();">Clear all</button>
+        </div>
+        
+    </div>
+
+    
+    <div class="row pb-3">
+        <!--div class="col-sm-6 table-responsive" id="firstTable"-->
+        <div class="col-sm-12 table-responsive" id="firstTable" style="display:none">
+            <p>Alignment summary:</p>
+            <table class="table table-hover table-bordered">
+                <thead class="table-light">
+                    <tr>
+                        <th>query</th>
+						<th>query length (MIS=X)</th>
+                        <th>segments</th>
+                        <th>length on ref</th>
+                        <th>left end</th>
+                        <th>right end</th>
+                        <th>orientation</th>
+                    </tr>
+                </thead>
+                <tbody id="alignmentInfo"></tbody>
+            </table>
+        </div>
+    </div>
+    
+    <div class="row pb-3" id="comSegm" style="display:none">
+        <div class="col-12 table-responsive">
+            <p>Common segments (M, I, S, =, or X) between transcripts: <span id="comSegmNo"></span></p>
+            <table class="table table-hover table-bordered">
+                <thead class="table-light"><tr>
+                    <th>common chunk name</th>
+                    <th>length</th>
+                    <th>type</th>
+                    <th>start on ref</th>
+                    <th>stop on ref</th>
+                </tr></thead>
+                <tbody id="comSegmTBody"></tbody>
+            </table>
+        </div>
+    </div>
+
+    <div class="row pb-3">
+        <div class="col-12" id="drawBtn" style="display:none">
+			<button type="button" class="btn btn-outline-success" onclick="testD.drawAttempt('#seg_graph');">draw</button>
+            <button type="button" class="btn btn-outline-primary" onclick="testD.printTranscripts();">Show transcripts</button>
+            
+            <div id="seg_graph"></div>
+            
+        </div>
+    </div>
+
+
+    
+
+</div>
+
+<div class="container-xxl my-2" id="transcripts">
+    
+    
+</div>
+
+<script>
+    
+         function loadMultiple () {
+             
+             const exFwd = `@HD	VN:1.0	GO:query
+@SQ	SN:NC_000077.7	LN:121973369
+@PG	ID:magicblast	PN:magicblast	CL:magicblast -query patz1.fa -subject NC_000077.7.fa 
+NM_001253690.1	0	NC_000077.7	3240457	255	1428M1395N64M5690N172M7082N73M1287N1436M18S	*	0	0	GGCGTGTGCGCTGGGCGCACCTGAGAGTACTACCGAGCCCTGGGCCGCACGTGCGGGGAGTGTGAGTGGTCCGCTGCAAAAGGCGTCTCGCTGCCTAAGGGAAGGGACCAGGGACTGGCGGGTGCCCGGCCCGGCGAGTGGGGAAGGGGCAGCGACCATGGAGCGGGTCAACGACGCTTCTTGCGGTCCGTCGGGCTGCTACACCTACCAGGTGAGCAGACACAGTACGGAGATGCTGCACAACCTGAACCAACAACGCAAAAACGGCGGGCGCTTTTGCGACGTGCTCCTACGAGTAGGCGACGAGAGCTTCCCAGCGCACCGCGCCGTACTGGCTGCCTGCAGCGAGTACTTTGAGTCTGTGTTCAGCGCCCAGTTAGGCGACGGCGGAGCTGCAGATGGTGGTCCTGCTGATGTGGGAGGCGCGGCGGCGGCTCCAGGCGGCGGAGCTGGAGGCAGCCGCGAACTGGAGATGCACACCATCAGTTCCAAAGTGTTCGGAGACATCCTGGACTTCGCTTATACGTCCCGAATCGTTGTGCGCCTAGAGAGCTTCCCCGAGCTCATGACGGCCGCCAAGTTCCTGCTGATGAGGTCGGTCATCGAGATCTGCCAGGAAGTAATCAAACAGTCCAACGTGCAGATCCTCGTGCCCCCTGCCCGGGCTGATATCATGCTCTTTCGCCCACCTGGGACTTCTGACTTGGGCTTCCCTTTGGACATGACCAACGGGGCAGCCATGGCAGCCAACAGTAACGGTATTGCTGGCAGTATGCAGCCCGAGGAGGAGGCTGCCAGGGCCACAGGTGCTGCTATTGCGGGCCAAGCTTCTCTGCCTGTGTTACCCGGGGTGGACAGATTGCCCATGGTGGCTGGACCCCTATCCCCCCAACTACTGACTTCTCCGTTCCCTAATGTGGCATCCAGTGCACCTCCACTAACTAGCAAGCGAGGCCGGGGACGCCCCAGGAAGGCCAACCTGCTGGACTCCATGTTTGGGTCTCCAGGGGGCTTGAGGGAAGCAGGCATCCTTCCATGTGGCCTGTGCGGGAAGGTGTTCACTGACGCCAACCGGCTCCGGCAACATGAGGCCCAGCACGGCGTCACAAGCCTCCAGTTGGGCTATATCGATCTTCCTCCTCCAAGGCTGGGTGAGAATGGGTTACCCATCTCCGAGGACCCCGATGGCCCCAGAAAAAGGAGCCGGACCAGGAAGCAAGTGGCTTGTGAGATCTGTGGCAAGATCTTTCGTGACGTATACCATCTCAACCGGCATAAGCTTTCCCACTCGGGGGAGAAGCCGTACTCGTGCCCGGTGTGTGGTCTGCGGTTCAAGAGAAAAGACCGAATGTCGTACCATGTGAGGTCCCATGATGGGTCAGTGGGCAAACCGTACATCTGCCAGAGCTGTGGGAAAGGTTTCTCCAGGCCAGATCACTTGAATGGACATATCAAGCAGGTGCACACTTCTGAGCGACCTCACAAGTGTCAGACCTGCAATGCCTCCTTTGCGACTCGAGACCGCCTGCGCTCCCACCTGGCCTGTCATGAAGACAAGGTGCCCTGCCAGGTGTGTGGAAAGTACTTGCGGGCCGCATACATGGCAGACCACCTGAAGAAGCACAGTGAGGGGCCCAGCAACTTCTGTAGCATCTGTAACCGAGGTCTCCAGGCACCAGGAACCCATCCTGAATGGGGGAGCAGCGTTCCACTGCGCCAGGACCTATGGCAACAAAGAAGGCCAGAAATGCTCACATCAGGATCTGATTGAGAGCTCCGACTCCTACGGTGACCTCTCCGACGCCAGCGACCTGAAGACGCCAGAGAAACAGAGTGCCAACGGCTCCTTCTCCTGCGACGTGGCAGTCCCTAAAAACAAAATGGAGTCTGACGGGGAGAAGAAGTACCCATGCCCTGAATGTGGGAGCTTCTTCCGTTCTAAGTCCTACTTGAACAAACACATCCAGAAGGTGCATGTCCGTGCCCTTGGGGGTCCCTTGGGGGACCTGGGCCCTGCCCTTGGTTCACCTTTCTCTCCCCAGCAGAACATGTCTCTTCTTGAGTCCTTTGGATTTCAGATTGTTCAGTCAGCGTTTGCATCATCTTTAGTGGATCCTGAGGTGGACCAGCAGCCCATGGGGCCTGAAGGGAAGTGAGACATGCTGTGTCCCCACAGAACAGCCGCTGGGGACTGCTGAGCAATGCTGTGAATGCAGAGGGAAGTGATGTCTTTGGGTTCTGTAGCTGAGAGATTTTTATTCATTTTTAAACCCCATCCCTGCCCCTCCCTCCCTCCATTAACCCCACCTGCTGTGGTCTTAGAAACAGACTCTCATCTGATACTCTCTGTAGAAATACTGAGAGACCCAATATGGGGCAAGGGCAGAAAGCACTACATCGGCCTCTGAGGCAGTACCAGTTCTGGTTTCTCTAGTGGTCTGAAGCCAGAATTTCTGGTGCTCAGTTATTGGTGTCCTCACCCCAACTCTAAGGCACTCTTGGGCCTCGCTTGGTAGTTTTGGTCCCTCCCACTTCTTTCATTCCTCACCCCCCTGCCTCTGTCCTCAAAAGAAGTTAAGTAGGGTCTCTACCCTCTTATGGCCAACTATTTTTAAGGAAGCCAGAAACCTACAGCATCCCATGGACCATACAAAGAGTGTCCTCTGAGGTTGGCCCTGGTCTTCTCGAGCTGCTGGAAGCTAACATTTCACTGCCAGGACAAGCTCACCTACTGAGGACACTTCTACCCCAAATTCCAGTTCTTACTTGAGTTTAACCATTCAGCTTGCTGTTGGGTTTTGATTCTCTAATTCTTATTATTGTTATTTTTAGGACCAGTTGTAGTGAATTGCTACTGAAAGCTACCCCAGGTGACACAGCTCTTTGTAAACCGCAGTCACACATTAGGGTTAGTATTAAACTTTGTTTAGGTGTACCATAATTAACTTGGCTAGTTGTTTGAAGTCTATGGAAGAAATAGTTTTATGCAAAATTTTAAAAAAAAAATTCCAGTTTGATCAGGAAGAGGGTTCCGTGGTGCTGAGAGCCAGGAAGGTGGGAGAACCTCAGGTAGAGACATCGAGTACCTTGATTGTCTTACACTTGAGCAGCCCAGGTTGACCTTGTGATGTGAATTGACCTGATCAGACTTTATTAAAAACGTTAGTATGATAAAAAAAAAAAAAAAAAAA	*	NH:i:1	AS:i:3173	NM:i:0	XS:A:+
+NM_001253691.1	0	NC_000077.7	3240457	255	1428M1395N64M1112N92M4486N172M8442N1436M18S	*	0	0	GGCGTGTGCGCTGGGCGCACCTGAGAGTACTACCGAGCCCTGGGCCGCACGTGCGGGGAGTGTGAGTGGTCCGCTGCAAAAGGCGTCTCGCTGCCTAAGGGAAGGGACCAGGGACTGGCGGGTGCCCGGCCCGGCGAGTGGGGAAGGGGCAGCGACCATGGAGCGGGTCAACGACGCTTCTTGCGGTCCGTCGGGCTGCTACACCTACCAGGTGAGCAGACACAGTACGGAGATGCTGCACAACCTGAACCAACAACGCAAAAACGGCGGGCGCTTTTGCGACGTGCTCCTACGAGTAGGCGACGAGAGCTTCCCAGCGCACCGCGCCGTACTGGCTGCCTGCAGCGAGTACTTTGAGTCTGTGTTCAGCGCCCAGTTAGGCGACGGCGGAGCTGCAGATGGTGGTCCTGCTGATGTGGGAGGCGCGGCGGCGGCTCCAGGCGGCGGAGCTGGAGGCAGCCGCGAACTGGAGATGCACACCATCAGTTCCAAAGTGTTCGGAGACATCCTGGACTTCGCTTATACGTCCCGAATCGTTGTGCGCCTAGAGAGCTTCCCCGAGCTCATGACGGCCGCCAAGTTCCTGCTGATGAGGTCGGTCATCGAGATCTGCCAGGAAGTAATCAAACAGTCCAACGTGCAGATCCTCGTGCCCCCTGCCCGGGCTGATATCATGCTCTTTCGCCCACCTGGGACTTCTGACTTGGGCTTCCCTTTGGACATGACCAACGGGGCAGCCATGGCAGCCAACAGTAACGGTATTGCTGGCAGTATGCAGCCCGAGGAGGAGGCTGCCAGGGCCACAGGTGCTGCTATTGCGGGCCAAGCTTCTCTGCCTGTGTTACCCGGGGTGGACAGATTGCCCATGGTGGCTGGACCCCTATCCCCCCAACTACTGACTTCTCCGTTCCCTAATGTGGCATCCAGTGCACCTCCACTAACTAGCAAGCGAGGCCGGGGACGCCCCAGGAAGGCCAACCTGCTGGACTCCATGTTTGGGTCTCCAGGGGGCTTGAGGGAAGCAGGCATCCTTCCATGTGGCCTGTGCGGGAAGGTGTTCACTGACGCCAACCGGCTCCGGCAACATGAGGCCCAGCACGGCGTCACAAGCCTCCAGTTGGGCTATATCGATCTTCCTCCTCCAAGGCTGGGTGAGAATGGGTTACCCATCTCCGAGGACCCCGATGGCCCCAGAAAAAGGAGCCGGACCAGGAAGCAAGTGGCTTGTGAGATCTGTGGCAAGATCTTTCGTGACGTATACCATCTCAACCGGCATAAGCTTTCCCACTCGGGGGAGAAGCCGTACTCGTGCCCGGTGTGTGGTCTGCGGTTCAAGAGAAAAGACCGAATGTCGTACCATGTGAGGTCCCATGATGGGTCAGTGGGCAAACCGTACATCTGCCAGAGCTGTGGGAAAGGTTTCTCCAGGCCAGATCACTTGAATGGACATATCAAGCAGGTGCACACTTCTGAGCGACCTCACAAGTGTCAGGTGTGGGTTGGGAGCAGCAGCGGCCTGCCGCCCCTGGAACCTCTTCCTAGCGACCTGCCATCATGGGACTTTGCCCAGCCTGCTTTGTGGAGACCTGCAATGCCTCCTTTGCGACTCGAGACCGCCTGCGCTCCCACCTGGCCTGTCATGAAGACAAGGTGCCCTGCCAGGTGTGTGGAAAGTACTTGCGGGCCGCATACATGGCAGACCACCTGAAGAAGCACAGTGAGGGGCCCAGCAACTTCTGTAGCATCTGTAACCGAGAAGGCCAGAAATGCTCACATCAGGATCTGATTGAGAGCTCCGACTCCTACGGTGACCTCTCCGACGCCAGCGACCTGAAGACGCCAGAGAAACAGAGTGCCAACGGCTCCTTCTCCTGCGACGTGGCAGTCCCTAAAAACAAAATGGAGTCTGACGGGGAGAAGAAGTACCCATGCCCTGAATGTGGGAGCTTCTTCCGTTCTAAGTCCTACTTGAACAAACACATCCAGAAGGTGCATGTCCGTGCCCTTGGGGGTCCCTTGGGGGACCTGGGCCCTGCCCTTGGTTCACCTTTCTCTCCCCAGCAGAACATGTCTCTTCTTGAGTCCTTTGGATTTCAGATTGTTCAGTCAGCGTTTGCATCATCTTTAGTGGATCCTGAGGTGGACCAGCAGCCCATGGGGCCTGAAGGGAAGTGAGACATGCTGTGTCCCCACAGAACAGCCGCTGGGGACTGCTGAGCAATGCTGTGAATGCAGAGGGAAGTGATGTCTTTGGGTTCTGTAGCTGAGAGATTTTTATTCATTTTTAAACCCCATCCCTGCCCCTCCCTCCCTCCATTAACCCCACCTGCTGTGGTCTTAGAAACAGACTCTCATCTGATACTCTCTGTAGAAATACTGAGAGACCCAATATGGGGCAAGGGCAGAAAGCACTACATCGGCCTCTGAGGCAGTACCAGTTCTGGTTTCTCTAGTGGTCTGAAGCCAGAATTTCTGGTGCTCAGTTATTGGTGTCCTCACCCCAACTCTAAGGCACTCTTGGGCCTCGCTTGGTAGTTTTGGTCCCTCCCACTTCTTTCATTCCTCACCCCCCTGCCTCTGTCCTCAAAAGAAGTTAAGTAGGGTCTCTACCCTCTTATGGCCAACTATTTTTAAGGAAGCCAGAAACCTACAGCATCCCATGGACCATACAAAGAGTGTCCTCTGAGGTTGGCCCTGGTCTTCTCGAGCTGCTGGAAGCTAACATTTCACTGCCAGGACAAGCTCACCTACTGAGGACACTTCTACCCCAAATTCCAGTTCTTACTTGAGTTTAACCATTCAGCTTGCTGTTGGGTTTTGATTCTCTAATTCTTATTATTGTTATTTTTAGGACCAGTTGTAGTGAATTGCTACTGAAAGCTACCCCAGGTGACACAGCTCTTTGTAAACCGCAGTCACACATTAGGGTTAGTATTAAACTTTGTTTAGGTGTACCATAATTAACTTGGCTAGTTGTTTGAAGTCTATGGAAGAAATAGTTTTATGCAAAATTTTAAAAAAAAAATTCCAGTTTGATCAGGAAGAGGGTTCCGTGGTGCTGAGAGCCAGGAAGGTGGGAGAACCTCAGGTAGAGACATCGAGTACCTTGATTGTCTTACACTTGAGCAGCCCAGGTTGACCTTGTGATGTGAATTGACCTGATCAGACTTTATTAAAAACGTTAGTATGATAAAAAAAAAAAAAAAAAAA	*	NH:i:1	AS:i:3192	NM:i:0	XS:A:+
+NM_019574.3	0	NC_000077.7	3240457	255	1428M1395N64M5690N172M8442N1436M	*	0	0	GGCGTGTGCGCTGGGCGCACCTGAGAGTACTACCGAGCCCTGGGCCGCACGTGCGGGGAGTGTGAGTGGTCCGCTGCAAAAGGCGTCTCGCTGCCTAAGGGAAGGGACCAGGGACTGGCGGGTGCCCGGCCCGGCGAGTGGGGAAGGGGCAGCGACCATGGAGCGGGTCAACGACGCTTCTTGCGGTCCGTCGGGCTGCTACACCTACCAGGTGAGCAGACACAGTACGGAGATGCTGCACAACCTGAACCAACAACGCAAAAACGGCGGGCGCTTTTGCGACGTGCTCCTACGAGTAGGCGACGAGAGCTTCCCAGCGCACCGCGCCGTACTGGCTGCCTGCAGCGAGTACTTTGAGTCTGTGTTCAGCGCCCAGTTAGGCGACGGCGGAGCTGCAGATGGTGGTCCTGCTGATGTGGGAGGCGCGGCGGCGGCTCCAGGCGGCGGAGCTGGAGGCAGCCGCGAACTGGAGATGCACACCATCAGTTCCAAAGTGTTCGGAGACATCCTGGACTTCGCTTATACGTCCCGAATCGTTGTGCGCCTAGAGAGCTTCCCCGAGCTCATGACGGCCGCCAAGTTCCTGCTGATGAGGTCGGTCATCGAGATCTGCCAGGAAGTAATCAAACAGTCCAACGTGCAGATCCTCGTGCCCCCTGCCCGGGCTGATATCATGCTCTTTCGCCCACCTGGGACTTCTGACTTGGGCTTCCCTTTGGACATGACCAACGGGGCAGCCATGGCAGCCAACAGTAACGGTATTGCTGGCAGTATGCAGCCCGAGGAGGAGGCTGCCAGGGCCACAGGTGCTGCTATTGCGGGCCAAGCTTCTCTGCCTGTGTTACCCGGGGTGGACAGATTGCCCATGGTGGCTGGACCCCTATCCCCCCAACTACTGACTTCTCCGTTCCCTAATGTGGCATCCAGTGCACCTCCACTAACTAGCAAGCGAGGCCGGGGACGCCCCAGGAAGGCCAACCTGCTGGACTCCATGTTTGGGTCTCCAGGGGGCTTGAGGGAAGCAGGCATCCTTCCATGTGGCCTGTGCGGGAAGGTGTTCACTGACGCCAACCGGCTCCGGCAACATGAGGCCCAGCACGGCGTCACAAGCCTCCAGTTGGGCTATATCGATCTTCCTCCTCCAAGGCTGGGTGAGAATGGGTTACCCATCTCCGAGGACCCCGATGGCCCCAGAAAAAGGAGCCGGACCAGGAAGCAAGTGGCTTGTGAGATCTGTGGCAAGATCTTTCGTGACGTATACCATCTCAACCGGCATAAGCTTTCCCACTCGGGGGAGAAGCCGTACTCGTGCCCGGTGTGTGGTCTGCGGTTCAAGAGAAAAGACCGAATGTCGTACCATGTGAGGTCCCATGATGGGTCAGTGGGCAAACCGTACATCTGCCAGAGCTGTGGGAAAGGTTTCTCCAGGCCAGATCACTTGAATGGACATATCAAGCAGGTGCACACTTCTGAGCGACCTCACAAGTGTCAGACCTGCAATGCCTCCTTTGCGACTCGAGACCGCCTGCGCTCCCACCTGGCCTGTCATGAAGACAAGGTGCCCTGCCAGGTGTGTGGAAAGTACTTGCGGGCCGCATACATGGCAGACCACCTGAAGAAGCACAGTGAGGGGCCCAGCAACTTCTGTAGCATCTGTAACCGAGAAGGCCAGAAATGCTCACATCAGGATCTGATTGAGAGCTCCGACTCCTACGGTGACCTCTCCGACGCCAGCGACCTGAAGACGCCAGAGAAACAGAGTGCCAACGGCTCCTTCTCCTGCGACGTGGCAGTCCCTAAAAACAAAATGGAGTCTGACGGGGAGAAGAAGTACCCATGCCCTGAATGTGGGAGCTTCTTCCGTTCTAAGTCCTACTTGAACAAACACATCCAGAAGGTGCATGTCCGTGCCCTTGGGGGTCCCTTGGGGGACCTGGGCCCTGCCCTTGGTTCACCTTTCTCTCCCCAGCAGAACATGTCTCTTCTTGAGTCCTTTGGATTTCAGATTGTTCAGTCAGCGTTTGCATCATCTTTAGTGGATCCTGAGGTGGACCAGCAGCCCATGGGGCCTGAAGGGAAGTGAGACATGCTGTGTCCCCACAGAACAGCCGCTGGGGACTGCTGAGCAATGCTGTGAATGCAGAGGGAAGTGATGTCTTTGGGTTCTGTAGCTGAGAGATTTTTATTCATTTTTAAACCCCATCCCTGCCCCTCCCTCCCTCCATTAACCCCACCTGCTGTGGTCTTAGAAACAGACTCTCATCTGATACTCTCTGTAGAAATACTGAGAGACCCAATATGGGGCAAGGGCAGAAAGCACTACATCGGCCTCTGAGGCAGTACCAGTTCTGGTTTCTCTAGTGGTCTGAAGCCAGAATTTCTGGTGCTCAGTTATTGGTGTCCTCACCCCAACTCTAAGGCACTCTTGGGCCTCGCTTGGTAGTTTTGGTCCCTCCCACTTCTTTCATTCCTCACCCCCCTGCCTCTGTCCTCAAAAGAAGTTAAGTAGGGTCTCTACCCTCTTATGGCCAACTATTTTTAAGGAAGCCAGAAACCTACAGCATCCCATGGACCATACAAAGAGTGTCCTCTGAGGTTGGCCCTGGTCTTCTCGAGCTGCTGGAAGCTAACATTTCACTGCCAGGACAAGCTCACCTACTGAGGACACTTCTACCCCAAATTCCAGTTCTTACTTGAGTTTAACCATTCAGCTTGCTGTTGGGTTTTGATTCTCTAATTCTTATTATTGTTATTTTTAGGACCAGTTGTAGTGAATTGCTACTGAAAGCTACCCCAGGTGACACAGCTCTTTGTAAACCGCAGTCACACATTAGGGTTAGTATTAAACTTTGTTTAGGTGTACCATAATTAACTTGGCTAGTTGTTTGAAGTCTATGGAAGAAATAGTTTTATGCAAAATTTTAAAAAAAAAATTCCAGTTTGATCAGGAAGAGGGTTCCGTGGTGCTGAGAGCCAGGAAGGTGGGAGAACCTCAGGTAGAGACATCGAGTACCTTGATTGTCTTACACTTGAGCAGCCCAGGTTGACCTTGTGATGTGAATTGACCTGATCAGACTTTATTAAAAACGTTAGTATGATA	*	NH:i:1	AS:i:3100	NM:i:0	XS:A:+
+             `;
+             
+             const exampleInv = `@HD	VN:1.0	GO:query
+@SQ	SN:NC_058377.1	LN:115366950
+@PG	ID:magicblast	PN:magicblast	CL:magicblast -query combinedXMs.fa -subject NC_058377.fa 
+XM_023239672.2	16	NC_058377.1	86007460	255	435M959N151M2606N116M94N151M211N83M532N159M5905N166M830N216M94N42M802N131M3763N61M366N77M	*	0	TTTCCTTTTTTTTTTTAAACAACTTCATGACCAACACAGATCAAACATCCATCCAGTCTACGTTGTTCTTTTTTTTTTCATAACATACAAATGCCCATTTACAAATAATACACCAAAATGAATAAAAGTTTGGATACCAAAATGAAGATTTGTTCCAACTGATAGCGTGCCTTCTGTATACAAAGGTCCTTGCTTCAAGTCCATTCCCCAGTGGTACAACACAGGACACAATTGCAGATCTGAAGTGCTTCTAACAGCCATTTTCCTTTCCTTCCTGAACGCCCAACTGCTGTGTCCACATAGTCACTGACTGAATTAACACCATATATCCTTTTTTTTTTTTTTTTTTTTACTGTAATCTTGGCCAATATTGAGACATATCAGGTTCACTTCCAGGAACTTGAACGGGAACTGACACACCAGGGGAAATGAGTCCTGTGGAAGTGGTGCCCGAGGTGCCCATTGGCTGACTGTTCATGTGTGTCTGCATATGTGGGGGGGTGTAGGTATCATAACTCCGCCCGTTCACCGAAGGGCTGGTGGGCAGCATGCAGGAGTACGAAGAGGTCTGGCTGGGGACTGGGGGTTGCATAGGCAGGTTATTCGCCATGGTGAAGCTGGGCATGGGTGGCAGAGCGCTGTACGTGTTTGTGAGGGCTGTGTCTGTCCGGCCCAACATGGAGCCAGAGGTGAAGGAGGAAACAGGCGTGGTGGGTTGTGGGATTGGCTGGTAGACACTGGTGCTGAAACTACTGCTGATGGGGATGTGACTAGGTGTGTTGCTGGCCTGTCTCCTCTGATTCCTCAGTTTTTCTTCTCTTCGCCATTTGGCCCTCCGATTAGAAAACCATACCTGTATTCTTGCTTCAGGTAGATCTATTTTGGCCGCTAGTCTTTCTCGGGCAAACACATCTGGATAATGGGTTCTCTCAAACTCTTTCTCCAGGGCCTCAATTTGCTCTTGGGTAAAGGATGTTCTATTTCTTTGCAGCTTCCGCTTCAGCTGAAGTCGCATTTGGGCCTCATCTGAATCTTCTCCATTGGAACTGATAGAGTTGGTATTCTCTCCCCCTCCTTCCTGTTGCTGGCAGCCATCTTGTGTAGGTTGCCCTGGCACAGAAGTCCCCGGATACCAACCGGGGCGGGTACCCCAGCTTCCGGTCTGCCCGTTCAACATCCTTAGTTTATCATACATGCCGTCTGCGCCCATCTGTTGCTTTTCGCTAGCCAGGTTGCGAAGAACTCTGTTTATTGATGACACACTTGGTATGTTATCGTTGGTACAGACCCCCTCGGACAATAATCTGTCTCGGATTTCCCAAGCAAAGATGGACGGGCACTCCCGCTTATACTGGGCTATTTTGCTTACAACTTCTGGAGTCGCTACTCTCGGTTTACTACCACCGATTGCCCTGGGTCTGATGGAGCCAGTCTCGTAATACCTGCCCAGAATTTTACTCACACATCCGTTGGACACGTTTTGATTGTCCAGCACTTGGACTTTTGCATCTGCATGGGTCTGCAGAATTCGGGAAATGTCGCACGGCCGGGCCCCGCTGTGAGCTAGCTCTACGATCTTCTGCCGGGTGGAGTCCGGCAGTGGCCGCCCGTTGACAAAGACACCACCGAGCTGATTCACTCCGCTGTGACTGTTCTGCATGCTGGCGCTGGCTGGGGGCCGCGGGATCCCACGGGGCTCGAAAATGGGGCTCTGAAATCTGGGAAGTCTGTCCACTCTTACAATAAAAGGTCTCACACATCTGCGCGCCCCTAGTTAAAGTCTTCCCC	*	NH:i:1	AS:i:1788	NM:i:0	XS:A:-
+XM_045039090.1	16	NC_058377.1	86007460	255	435M959N151M2606N116M94N151M211N83M532N159M5905N166M830N216M938N131M3763N61M366N77M	*	0	0	TTTCCTTTTTTTTTTTAAACAACTTCATGACCAACACAGATCAAACATCCATCCAGTCTACGTTGTTCTTTTTTTTTTCATAACATACAAATGCCCATTTACAAATAATACACCAAAATGAATAAAAGTTTGGATACCAAAATGAAGATTTGTTCCAACTGATAGCGTGCCTTCTGTATACAAAGGTCCTTGCTTCAAGTCCATTCCCCAGTGGTACAACACAGGACACAATTGCAGATCTGAAGTGCTTCTAACAGCCATTTTCCTTTCCTTCCTGAACGCCCAACTGCTGTGTCCACATAGTCACTGACTGAATTAACACCATATATCCTTTTTTTTTTTTTTTTTTTTACTGTAATCTTGGCCAATATTGAGACATATCAGGTTCACTTCCAGGAACTTGAACGGGAACTGACACACCAGGGGAAATGAGTCCTGTGGAAGTGGTGCCCGAGGTGCCCATTGGCTGACTGTTCATGTGTGTCTGCATATGTGGGGGGGTGTAGGTATCATAACTCCGCCCGTTCACCGAAGGGCTGGTGGGCAGCATGCAGGAGTACGAAGAGGTCTGGCTGGGGACTGGGGGTTGCATAGGCAGGTTATTCGCCATGGTGAAGCTGGGCATGGGTGGCAGAGCGCTGTACGTGTTTGTGAGGGCTGTGTCTGTCCGGCCCAACATGGAGCCAGAGGTGAAGGAGGAAACAGGCGTGGTGGGTTGTGGGATTGGCTGGTAGACACTGGTGCTGAAACTACTGCTGATGGGGATGTGACTAGGTGTGTTGCTGGCCTGTCTCCTCTGATTCCTCAGTTTTTCTTCTCTTCGCCATTTGGCCCTCCGATTAGAAAACCATACCTGTATTCTTGCTTCAGGTAGATCTATTTTGGCCGCTAGTCTTTCTCGGGCAAACACATCTGGATAATGGGTTCTCTCAAACTCTTTCTCCAGGGCCTCAATTTGCTCTTGGGTAAAGGATGTTCTATTTCTTTGCAGCTTCCGCTTCAGCTGAAGTCGCATTTGGGCCTCATCTGAATCTTCTCCATTGGAACTGATAGAGTTGGTATTCTCTCCCCCTCCTTCCTGTTGCTGGCAGCCATCTTGTGTAGGTTGCCCTGGCACAGAAGTCCCCGGATACCAACCGGGGCGGGTACCCCAGCTTCCGGTCTGCCCGTTCAACATCCTTAGTTTATCATACATGCCGTCTGCGCCCATCTGTTGCTTTTCGCTAGCCAGGTTGCGAAGAACTCTGTTTATTGATGACACACTTGGTATGTTATCGTTGGTACAGACCCCCTCGGACAATAATCTGTCTCGGATTTCCCAAGCAAAGATGGACGGGCACTCCCGCTTATACTGGGCTATTTTGCTTACAACTTCTGGAGTCGCTACTCTCGGTTTACTACCACCGATTGCCCTGGGTCTGATGGAGCCAGTCTCGTAATACCTGCCCAGAATTTTACTCACACATCCGTTGGACACCTGCAGAATTCGGGAAATGTCGCACGGCCGGGCCCCGCTGTGAGCTAGCTCTACGATCTTCTGCCGGGTGGAGTCCGGCAGTGGCCGCCCGTTGACAAAGACACCACCGAGCTGATTCACTCCGCTGTGACTGTTCTGCATGCTGGCGCTGGCTGGGGGCCGCGGGATCCCACGGGGCTCGAAAATGGGGCTCTGAAATCTGGGAAGTCTGTCCACTCTTACAATAAAAGGTCTCACACATCTGCGCGCCCCTAGTTAAAGTCTTCCCC	*	NH:i:1	AS:i:1746	NM:i:0	XS:A:-
+XM_045039091.1	16	NC_058377.1	86007460	255	435M959N151M2606N116M94N151M211N83M532N159M5905N166M1031N15M94N42M802N131M3763N61M366N77M	*	0	TTTCCTTTTTTTTTTTAAACAACTTCATGACCAACACAGATCAAACATCCATCCAGTCTACGTTGTTCTTTTTTTTTTCATAACATACAAATGCCCATTTACAAATAATACACCAAAATGAATAAAAGTTTGGATACCAAAATGAAGATTTGTTCCAACTGATAGCGTGCCTTCTGTATACAAAGGTCCTTGCTTCAAGTCCATTCCCCAGTGGTACAACACAGGACACAATTGCAGATCTGAAGTGCTTCTAACAGCCATTTTCCTTTCCTTCCTGAACGCCCAACTGCTGTGTCCACATAGTCACTGACTGAATTAACACCATATATCCTTTTTTTTTTTTTTTTTTTTACTGTAATCTTGGCCAATATTGAGACATATCAGGTTCACTTCCAGGAACTTGAACGGGAACTGACACACCAGGGGAAATGAGTCCTGTGGAAGTGGTGCCCGAGGTGCCCATTGGCTGACTGTTCATGTGTGTCTGCATATGTGGGGGGGTGTAGGTATCATAACTCCGCCCGTTCACCGAAGGGCTGGTGGGCAGCATGCAGGAGTACGAAGAGGTCTGGCTGGGGACTGGGGGTTGCATAGGCAGGTTATTCGCCATGGTGAAGCTGGGCATGGGTGGCAGAGCGCTGTACGTGTTTGTGAGGGCTGTGTCTGTCCGGCCCAACATGGAGCCAGAGGTGAAGGAGGAAACAGGCGTGGTGGGTTGTGGGATTGGCTGGTAGACACTGGTGCTGAAACTACTGCTGATGGGGATGTGACTAGGTGTGTTGCTGGCCTGTCTCCTCTGATTCCTCAGTTTTTCTTCTCTTCGCCATTTGGCCCTCCGATTAGAAAACCATACCTGTATTCTTGCTTCAGGTAGATCTATTTTGGCCGCTAGTCTTTCTCGGGCAAACACATCTGGATAATGGGTTCTCTCAAACTCTTTCTCCAGGGCCTCAATTTGCTCTTGGGTAAAGGATGTTCTATTTCTTTGCAGCTTCCGCTTCAGCTGAAGTCGCATTTGGGCCTCATCTGAATCTTCTCCATTGGAACTGATAGAGTTGGTATTCTCTCCCCCTCCTTCCTGTTGCTGGCAGCCATCTTGTGTAGGTTGCCCTGGCACAGAAGTCCCCGGATACCAACCGGGGCGGGTACCCCAGCTTCCGGTCTGCCCGTTCAACATCCTTAGTTTATCATACATGCCGTCTGCGCCCATCTGTTGCTTTTCGCTAGCCAGGTTGCGAAGAACTCTGTTTATTGATGACACACATCCGTTGGACACGTTTTGATTGTCCAGCACTTGGACTTTTGCATCTGCATGGGTCTGCAGAATTCGGGAAATGTCGCACGGCCGGGCCCCGCTGTGAGCTAGCTCTACGATCTTCTGCCGGGTGGAGTCCGGCAGTGGCCGCCCGTTGACAAAGACACCACCGAGCTGATTCACTCCGCTGTGACTGTTCTGCATGCTGGCGCTGGCTGGGGGCCGCGGGATCCCACGGGGCTCGAAAATGGGGCTCTGAAATCTGGGAAGTCTGTCCACTCTTACAATAAAAGGTCTCACACATCTGCGCGCCCCTAGTTAAAGTCTTCCCC	*	NH:i:1	AS:i:1587	NM:i:0	XS:A:-          
+XM_045039092.1	16	NC_058377.1	86007460	255	435M959N151M2606N116M94N151M211N83M532N159M5905N166M1031N15M938N131M3763N61M366N77M	*	0	0	TTTCCTTTTTTTTTTTAAACAACTTCATGACCAACACAGATCAAACATCCATCCAGTCTACGTTGTTCTTTTTTTTTTCATAACATACAAATGCCCATTTACAAATAATACACCAAAATGAATAAAAGTTTGGATACCAAAATGAAGATTTGTTCCAACTGATAGCGTGCCTTCTGTATACAAAGGTCCTTGCTTCAAGTCCATTCCCCAGTGGTACAACACAGGACACAATTGCAGATCTGAAGTGCTTCTAACAGCCATTTTCCTTTCCTTCCTGAACGCCCAACTGCTGTGTCCACATAGTCACTGACTGAATTAACACCATATATCCTTTTTTTTTTTTTTTTTTTTACTGTAATCTTGGCCAATATTGAGACATATCAGGTTCACTTCCAGGAACTTGAACGGGAACTGACACACCAGGGGAAATGAGTCCTGTGGAAGTGGTGCCCGAGGTGCCCATTGGCTGACTGTTCATGTGTGTCTGCATATGTGGGGGGGTGTAGGTATCATAACTCCGCCCGTTCACCGAAGGGCTGGTGGGCAGCATGCAGGAGTACGAAGAGGTCTGGCTGGGGACTGGGGGTTGCATAGGCAGGTTATTCGCCATGGTGAAGCTGGGCATGGGTGGCAGAGCGCTGTACGTGTTTGTGAGGGCTGTGTCTGTCCGGCCCAACATGGAGCCAGAGGTGAAGGAGGAAACAGGCGTGGTGGGTTGTGGGATTGGCTGGTAGACACTGGTGCTGAAACTACTGCTGATGGGGATGTGACTAGGTGTGTTGCTGGCCTGTCTCCTCTGATTCCTCAGTTTTTCTTCTCTTCGCCATTTGGCCCTCCGATTAGAAAACCATACCTGTATTCTTGCTTCAGGTAGATCTATTTTGGCCGCTAGTCTTTCTCGGGCAAACACATCTGGATAATGGGTTCTCTCAAACTCTTTCTCCAGGGCCTCAATTTGCTCTTGGGTAAAGGATGTTCTATTTCTTTGCAGCTTCCGCTTCAGCTGAAGTCGCATTTGGGCCTCATCTGAATCTTCTCCATTGGAACTGATAGAGTTGGTATTCTCTCCCCCTCCTTCCTGTTGCTGGCAGCCATCTTGTGTAGGTTGCCCTGGCACAGAAGTCCCCGGATACCAACCGGGGCGGGTACCCCAGCTTCCGGTCTGCCCGTTCAACATCCTTAGTTTATCATACATGCCGTCTGCGCCCATCTGTTGCTTTTCGCTAGCCAGGTTGCGAAGAACTCTGTTTATTGATGACACACATCCGTTGGACACCTGCAGAATTCGGGAAATGTCGCACGGCCGGGCCCCGCTGTGAGCTAGCTCTACGATCTTCTGCCGGGTGGAGTCCGGCAGTGGCCGCCCGTTGACAAAGACACCACCGAGCTGATTCACTCCGCTGTGACTGTTCTGCATGCTGGCGCTGGCTGGGGGCCGCGGGATCCCACGGGGCTCGAAAATGGGGCTCTGAAATCTGGGAAGTCTGTCCACTCTTACAATAAAAGGTCTCACACATCTGCGCGCCCCTAGTTAAAGTCTTCCCC	*	NH:i:1	AS:i:1545	NM:i:0	XS:A:-`;
+             
+//            document.getElementById("magic_string").innerHTML = exampleInv;
+            document.getElementById("magic_string").value = exFwd;
+             
+        }
+    
+    window.addEventListener('resize', () => testD.drawAttempt('#seg_graph'));
+</script>
+
+</body></html>

@@ -219,16 +219,21 @@
 			 }
              
              printTranscripts() {
-                 const transcContainer = d3.select("#transcripts").selectAll("div").data(this.alignmentsAROB).enter().append("div").attr("class", "row my-2 rounded border border-dark border-3");
-                 var eachRow = transcContainer.append("div").attr("class", "col-12 table-responsive");
+                 const transcContainer = d3.select("#transcripts").selectAll("div").data(this.alignmentsAROB).enter().append("div").attr("class", "container-xxl my-2  rounded border border-dark border-3");
+                 
+                 var firstRow = transcContainer.append("div").attr("class", "row my-2");
+                 
+                 var colOfFirstRow = firstRow.append("div").attr("class", "col-12");
+                                  
+                 var firstP = colOfFirstRow.append("p").text(d => "Transcript: " + d.queryName + " (" + d.querySequence.length + " bp)");
+//                 firstP.text(d => "Transcript: " + d.queryName + " (" + d.querySequence.length + " bp)");
+                 
+                 var tableRow = transcContainer.append("div").attr("class", "row my-2");
+                 
+                 var colOfTableRow = tableRow.append("div").attr("class", "col-12 table-responsive");
                  
                  
-                 
-                 var firstP = eachRow.append("p");
-                 firstP.text(d => "Transcript: " + d.queryName + " (" + d.querySequence.length + " bp)");
-                 
-                 
-                 var noSkippedTable = eachRow.append("table").attr("class", "table table-hover table-bordered");
+                 var noSkippedTable = colOfTableRow.append("table").attr("class", "table table-hover table-bordered");
                  var noSkippedTableHead = noSkippedTable.append("thead").attr('class', 'table-light');
                  var noSkippedTableHeadTr = noSkippedTableHead.append("tr");
                  noSkippedTableHeadTr.append("th").text("order");
@@ -264,11 +269,11 @@
                  // and finally the sketch of the exons
  
                  
-                 const width = parseInt(eachRow.style("width"), 10)-50;
-                 const height = parseInt(eachRow.style("heigth"), 10);
+                 const width = parseInt(colOfTableRow.style("width"), 10)-50;
+                 const height = parseInt(colOfTableRow.style("heigth"), 10);
                  
-                 console.log(width);
-                 console.log(height);
+//                 console.log(width);
+//                 console.log(height);
                  
                  const paddingLeft = 10;
                  const paddingRight = 5;
@@ -279,7 +284,11 @@
 				 
 				 const matched_height = 16;
                  
-                 const localSVG = eachRow.append("svg").attr('width', width).attr('height', calcHeight+paddingTop);
+                 const graphRow = transcContainer.append("div").attr("class", "row my-2");
+                 
+                 var colOfGraphRow = graphRow.append("div").attr("class", "col-12");
+                 
+                 const localSVG = colOfGraphRow.append("svg").attr('width', width).attr('height', calcHeight+paddingTop);
         
                  var bars = localSVG.selectAll('rect').data(d => d.noSkippedSegmSet).enter()
 				 .append('rect')
@@ -481,10 +490,7 @@
 
 </div>
 
-<div class="container-xxl my-2" id="transcripts">
-    
-    
-</div>
+<div id="transcripts"></div>
 
 <script>
     

@@ -5,4 +5,4 @@ Start by comparing an mRNA (or a set of mRNAs) with a chromosome, all in FASTA f
 
 $ magicblast -query QUERY.fa -subject SUBJECT.fa
 
-Then, paste SAM output in the textarea and click "Read Str" to start exploring the alignments.
+Then, paste SAM output in the textarea and click "Read Str" to start exploring the alignments. Alternatively, you can press "Load example" to see how it works!

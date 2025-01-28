@@ -225,7 +225,7 @@
                  
                  var colOfFirstRow = firstRow.append("div").attr("class", "col-12");
                                   
-                 var firstP = colOfFirstRow.append("p").text(d => "Transcript: " + d.queryName + " (" + d.querySequence.length + " bp)");
+                 var firstP = colOfFirstRow.append("p").text(d => "Transcript: " + d.queryName + " (" + d.querySequence.length + " bp); order is 5' to 3' as in mRNA.");
 //                 firstP.text(d => "Transcript: " + d.queryName + " (" + d.querySequence.length + " bp)");
                  
                  var tableRow = transcContainer.append("div").attr("class", "row my-2");
@@ -255,7 +255,7 @@
                  var noSkippedTableBodyTr = noSkippedTableBody.selectAll("tr").data(d => d.noSkippedSegmSet).enter().append("tr");
                  noSkippedTableBodyTr.append("td").text((d, i) => i+1);
                  
-                 var chunk_nameTD = noSkippedTableBodyTr.append("td").attr("class", d => this.commonNames.includes(d.chunk_name) ? "table-success" : "table-danger").text(d => d.chunk_name);
+                 var chunk_nameTD = noSkippedTableBodyTr.append("td").attr("class", d => this.commonNames.includes(d.chunk_name) ? "table-success" : "table-warning").text(d => d.chunk_name);
                  noSkippedTableBodyTr.append("td").text(d => d.chunk_length);
                  noSkippedTableBodyTr.append("td").text(d => d.chunk_type);
                  noSkippedTableBodyTr.append("td").text(d => d.newStart);
@@ -328,6 +328,9 @@
 			 }
 			 
 			 drawAttempt(elementId) {
+                 
+                 this.drawActivated = true;
+                 
                  const paddingLeft = 10;
                  const paddingRight = 5;
 				 
@@ -390,12 +393,7 @@
 		 
 		 var testD = new oneRead();
          
-                 
-               
-         
-     
-                           
-         function clearTable () {
+        function clearTable () {
              testD = new oneRead();
              
              document.getElementById("magic_string").value = "";
@@ -405,6 +403,7 @@
              document.getElementById("alignmentInfo").innerHTML = "";
              document.getElementById("comSegmTBody").innerHTML = "";
              document.getElementById("seg_graph").innerHTML = "";
+             document.getElementById("transcripts").innerHTML = "";
              
              
          }
@@ -461,10 +460,10 @@
     
     <div class="row pb-3" id="comSegm" style="display:none">
         <div class="col-12 table-responsive">
-            <p>Common segments (M, I, S, =, or X) between transcripts: <span id="comSegmNo"></span></p>
+            <p>Common segments (M, I, S, =, or X) between transcripts (5' to 3' as in mRNA): <span id="comSegmNo"></span></p>
             <table class="table table-hover table-bordered">
                 <thead class="table-light"><tr>
-                    <th>common chunk name</th>
+                    <th>common chunk</th>
                     <th>length</th>
                     <th>type</th>
                     <th>start on ref</th>
@@ -517,7 +516,11 @@ XM_045039092.1	16	NC_058377.1	86007460	255	435M959N151M2606N116M94N151M211N83M53
              
         }
     
-    window.addEventListener('resize', () => testD.drawAttempt('#seg_graph'));
+
+        window.addEventListener('resize', () => testD.drawAttempt('#seg_graph'));
+
+    
+    
 </script>
 
 </body></html>

@@ -233,19 +233,26 @@
                  var colOfTableRow = tableRow.append("div").attr("class", "col-12 table-responsive");
                  
                  
-                 var noSkippedTable = colOfTableRow.append("table").attr("class", "table table-hover table-bordered");
+                 var noSkippedTable = colOfTableRow.append("table").attr("class", "table table-hover table-bordered text-center");
                  var noSkippedTableHead = noSkippedTable.append("thead").attr('class', 'table-light');
+                 
+                 var noSkippedTableHeadTopTr = noSkippedTableHead.append("tr");
+                 noSkippedTableHeadTopTr.append("th").attr("rowspan", "2").text("order");
+                 noSkippedTableHeadTopTr.append("th").attr("rowspan", "2").text("name");
+                 noSkippedTableHeadTopTr.append("th").attr("rowspan", "2").text("length");
+                 noSkippedTableHeadTopTr.append("th").attr("rowspan", "2").text("type");
+                 noSkippedTableHeadTopTr.append("th").attr("colspan", "2").text("on mRNA");
+                 noSkippedTableHeadTopTr.append("th").attr("colspan", "2").text("on DNA");
+                 noSkippedTableHeadTopTr.append("th").attr("colspan", "2").text("on primary transcript");
+                 
                  var noSkippedTableHeadTr = noSkippedTableHead.append("tr");
-                 noSkippedTableHeadTr.append("th").text("order");
-                 noSkippedTableHeadTr.append("th").text("name");
-                 noSkippedTableHeadTr.append("th").text("length");
-                 noSkippedTableHeadTr.append("th").text("type");
-                 noSkippedTableHeadTr.append("th").text("new start");
-                 noSkippedTableHeadTr.append("th").text("new stop");
-                 noSkippedTableHeadTr.append("th").text("subject start");
-                 noSkippedTableHeadTr.append("th").text("subject stop");
-                 noSkippedTableHeadTr.append("th").text("old start");
-                 noSkippedTableHeadTr.append("th").text("old stop");
+                 
+                 noSkippedTableHeadTr.append("th").text("start");
+                 noSkippedTableHeadTr.append("th").text("stop");
+                 noSkippedTableHeadTr.append("th").text("start");
+                 noSkippedTableHeadTr.append("th").text("stop");
+                 noSkippedTableHeadTr.append("th").text("start");
+                 noSkippedTableHeadTr.append("th").text("stop");
                  
                  
                  var noSkippedTableBody = noSkippedTable.append("tbody");
@@ -461,7 +468,7 @@
     
     <div class="row pb-3" id="comSegm" style="display:none">
         <div class="col-12 table-responsive">
-            <p>Common segments (M, I, S, =, or X) between transcripts (5' to 3' as in mRNA): <span id="comSegmNo"></span></p>
+            <p>Common segments (M, I, S, =, or X) between transcripts (order is 5' to 3' as in mRNA): <span id="comSegmNo"></span></p>
             <table class="table table-hover table-bordered">
                 <thead class="table-light"><tr>
                     <th>common chunk</th>
@@ -480,7 +487,7 @@
 			<button type="button" class="btn btn-outline-success" onclick="testD.drawAttempt('#seg_graph');">draw</button>
             <button type="button" class="btn btn-outline-primary" onclick="testD.printTranscripts();">Show transcripts</button>
             
-            <div id="seg_graph"></div>
+            <div id="seg_graph" class="my-3 bg-light"></div>
             
         </div>
     </div>
